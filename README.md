@@ -1,4 +1,4 @@
-# Aharamitra -- AI-Based Food Risk & Portion Intelligence System
+# Aharamitra - AI-Based Food Risk & Portion Intelligence System
 
 ## Overview
 
