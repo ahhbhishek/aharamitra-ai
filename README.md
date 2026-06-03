@@ -67,8 +67,8 @@ It outputs:
 
 ### Models Used
 
-* **XGBoost Classifier** → predicts glucose spike risk
-* **XGBoost Regressor** → predicts safe portion size
+* **XGBoost Classifier** -> predicts glucose spike risk
+* **XGBoost Regressor** -> predicts safe portion size
 
 ### Train-Test Split
 
