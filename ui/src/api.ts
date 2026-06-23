@@ -7,6 +7,7 @@ export interface FoodInfo {
   festival: string
   region: string
   glycemic_index: number
+  weight_g: number
   carbs_per_item_g: number
   sugar_per_item_g: number
   protein_per_item_g: number
@@ -16,21 +17,29 @@ export interface FoodInfo {
 }
 
 export interface PredictionResponse {
-  glucose_spike_risk: string
-  risk_encoded: number
-  safe_portion_count: number
-  confidence: number | null
+  glucose_spike_risk: string   // low | moderate | high | very_high
+  verdict: string             // Enjoy | Go easy | Limit | Avoid
+  safe_grams: number          // grams of this food safe to eat
+  safe_pieces: string         // human-friendly: "1 piece", "1-2 pieces", ...
+  sugar_g: number             // total sugar in safe_grams
+  carbs_g: number             // total carbs in safe_grams
+  energy_kcal: number         // total calories in safe_grams
+  glycemic_load: number       // the food's GL (for the "why" section)
+  reasons: string[]           // 2-3 short, personalized bullets
   food_name: string
   festival: string
   region: string
 }
 
 export interface PredictionRequest {
+  // Natural profile inputs (BMI is derived server-side from height/weight).
+  gender: string              // 'male' | 'female'
   age: number
-  bmi: number
-  diabetes_status: number
-  fasting_state: number
-  bmi_category: string
+  height_cm: number
+  weight_kg: number
+  diabetes_status: number     // 1 | 0
+  fasting_state: number       // 1 | 0
+  // Food + context
   festival: string
   region: string
   food_name: string

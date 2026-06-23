@@ -48,6 +48,73 @@ app.add_middleware(
 
 
 # ---------------------------------------------------------------------------
+# Lookup tables & helpers for the human-friendly output
+# ---------------------------------------------------------------------------
+
+# {food_name -> FoodNutrition dict} for O(1) weight lookup.
+_FOOD_BY_NAME = {f["food_name"]: f for f in FOODS}
+
+# Risk label -> one-word action + emoji shown in the UI.
+VERDICTS = {
+    "low": "Enjoy",
+    "moderate": "Go easy",
+    "high": "Limit",
+    "very_high": "Avoid",
+}
+
+
+def human_pieces(portions: float) -> str:
+    """Round a fractional portion count into friendly piece language.
+
+    Examples: 0.4 -> "½ piece", 1.0 -> "1 piece", 1.5 -> "1-2 pieces",
+    2.3 -> "2-3 pieces", 3.0 -> "3 pieces".
+    """
+    p = max(0.0, portions)
+    # Below ~0.6 we collapse to a half-piece suggestion.
+    if p < 0.6:
+        return "½ piece" if p > 0.1 else "Just a taste"
+    low = int(round(p - 0.25))
+    high = int(round(p + 0.25))
+    if low < 1:
+        low = 1
+    if high < 1:
+        high = 1
+    if low == high:
+        return f"{low} piece{'s' if low > 1 else ''}"
+    return f"{low}-{high} pieces"
+
+
+def build_reasons(req: PredictionRequest, gl: float) -> list[str]:
+    """Generate 2-3 short, personalized 'why' bullets.
+
+    Order matters: the most decisive factor (glycemic load) comes first,
+    followed by the user-specific modifiers, capped at three so the card
+    stays scannable.
+    """
+    reasons: list[str] = []
+
+    if gl > 15:
+        reasons.append(f"High glycemic load (GL {gl:.1f})")
+    elif gl > 11:
+        reasons.append(f"Moderate glycemic load (GL {gl:.1f})")
+    else:
+        reasons.append(f"Low glycemic load (GL {gl:.1f})")
+
+    if req.sugar_per_item_g >= 12:
+        reasons.append(f"{int(req.sugar_per_item_g)}g sugar per piece")
+    if req.diabetes_status == 1:
+        reasons.append("Diabetes raises your spike risk")
+    if req.bmi_category in ("overweight", "obese"):
+        reasons.append(f"Your BMI ({req.bmi:.0f}) is above the healthy range")
+    if req.fasting_state == 0:
+        reasons.append("On an empty stomach, the spike is sharper")
+    if req.age >= 55:
+        reasons.append("Slower sugar metabolism at this age")
+
+    return reasons[:3]
+
+
+# ---------------------------------------------------------------------------
 # Lazy model loading
 # ---------------------------------------------------------------------------
 
@@ -130,7 +197,12 @@ def festivals() -> list[str]:
 
 @app.post("/predict", response_model=PredictionResponse)
 def predict(req: PredictionRequest) -> PredictionResponse:
-    """Predict glucose-spike risk and safe portion size."""
+    """Predict glucose-spike risk and safe portion size.
+
+    The ML model still predicts a fractional ``safe_portion_count``; this
+    endpoint converts it into grams, macros, a verdict, and the 'why'
+    bullets before returning — so callers receive human-actionable output.
+    """
     if not bundle.loaded:
         try:
             bundle.load()
@@ -142,21 +214,36 @@ def predict(req: PredictionRequest) -> PredictionResponse:
     sample = req.to_model_input()
     X = pd.DataFrame([sample])[INPUT_FEATURES]
 
+    # ML inference (unchanged): risk class + portion count.
     risk_num = int(bundle.classifier.predict(X)[0])
     risk_label = str(bundle.risk_encoder.inverse_transform([risk_num])[0])
     portion = float(bundle.regressor.predict(X)[0])
+    portion = max(0.0, min(portion, 3.0))  # clamp to the trained range
 
-    try:
-        proba = bundle.classifier.predict_proba(X)
-        confidence = float(proba.max(axis=1)[0])
-    except Exception:
-        confidence = None
+    # Resolve the food's per-portion weight (grams for ONE piece/serving).
+    food = _FOOD_BY_NAME.get(req.food_name)
+    if food is None:
+        raise HTTPException(status_code=400, detail=f"Unknown food: {req.food_name}")
+    weight_g = float(food["weight_g"])
+
+    # Translate the abstract portion count into concrete units.
+    safe_grams = max(5, round(portion * weight_g))
+    safe_pieces = human_pieces(portion)
+    sugar_g = round(portion * req.sugar_per_item_g, 1)
+    carbs_g = round(portion * req.carbs_per_item_g, 1)
+    energy_kcal = round(portion * req.energy_per_item_kcal)
+    gl = round(sample["glycemic_load"], 1)
 
     return PredictionResponse(
         glucose_spike_risk=risk_label,
-        risk_encoded=risk_num,
-        safe_portion_count=round(portion, 2),
-        confidence=round(confidence, 4) if confidence is not None else None,
+        verdict=VERDICTS.get(risk_label, "Go easy"),
+        safe_grams=safe_grams,
+        safe_pieces=safe_pieces,
+        sugar_g=sugar_g,
+        carbs_g=carbs_g,
+        energy_kcal=energy_kcal,
+        glycemic_load=gl,
+        reasons=build_reasons(req, gl),
         food_name=req.food_name,
         festival=req.festival,
         region=req.region,

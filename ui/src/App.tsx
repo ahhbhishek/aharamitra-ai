@@ -5,102 +5,30 @@ import { api, type FoodInfo, type PredictionResponse } from './api'
 /*  Constants                                                          */
 /* ------------------------------------------------------------------ */
 
-const RISK_COLORS: Record<string, { bg: string; text: string; border: string; bar: string }> = {
-  low:        { bg: 'bg-emerald-50',  text: 'text-emerald-700',  border: 'border-emerald-300', bar: '#10b981' },
-  moderate:   { bg: 'bg-amber-50',   text: 'text-amber-700',   border: 'border-amber-300',  bar: '#f59e0b' },
-  high:       { bg: 'bg-orange-50',  text: 'text-orange-700',  border: 'border-orange-300', bar: '#f97316' },
-  very_high:  { bg: 'bg-red-50',     text: 'text-red-700',     border: 'border-red-300',    bar: '#ef4444' },
+// Risk label -> visual treatment for the verdict badge.
+const RISK_STYLES: Record<string, { bg: string; text: string; border: string; emoji: string }> = {
+  low:       { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-300', emoji: '🟢' },
+  moderate:  { bg: 'bg-amber-50',   text: 'text-amber-700',   border: 'border-amber-300',  emoji: '🟡' },
+  high:      { bg: 'bg-orange-50',  text: 'text-orange-700',  border: 'border-orange-300', emoji: '🟠' },
+  very_high: { bg: 'bg-red-50',     text: 'text-red-700',     border: 'border-red-300',    emoji: '🔴' },
 }
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
 
-function bmiCategoryFromBmi(bmi: number): string {
+/** BMI from height (cm) and weight (kg). */
+function computeBmi(heightCm: number, weightKg: number): number {
+  const m = heightCm / 100
+  return weightKg / (m * m)
+}
+
+/** WHO BMI category label. */
+function bmiCategory(bmi: number): string {
   if (bmi < 18.5) return 'underweight'
   if (bmi < 25) return 'normal'
   if (bmi < 30) return 'overweight'
   return 'obese'
-}
-
-function riskScore(risk: string): number {
-  // Map risk label to a 0-100 gauge value
-  const map: Record<string, number> = { low: 20, moderate: 50, high: 75, very_high: 95 }
-  return map[risk] ?? 0
-}
-
-/* ------------------------------------------------------------------ */
-/*  Components                                                         */
-/* ------------------------------------------------------------------ */
-
-function RiskGauge({ risk }: { risk: string }) {
-  const score = riskScore(risk)
-  const colors = RISK_COLORS[risk] ?? RISK_COLORS.moderate
-
-  // SVG arc gauge: 180° semicircle
-  const r = 80
-  const cx = 100
-  const cy = 95
-  const circumference = Math.PI * r // half circle
-  const offset = circumference * (1 - score / 100)
-
-  return (
-    <div className="flex flex-col items-center gap-2">
-      <svg viewBox="0 0 200 120" className="w-48 h-32">
-        {/* Background arc */}
-        <path
-          d={`M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${cx + r} ${cy}`}
-          fill="none"
-          stroke="#e2e8f0"
-          strokeWidth="12"
-          strokeLinecap="round"
-        />
-        {/* Filled arc */}
-        <path
-          d={`M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${cx + r} ${cy}`}
-          fill="none"
-          stroke={colors.bar}
-          strokeWidth="12"
-          strokeLinecap="round"
-          strokeDasharray={circumference}
-          strokeDashoffset={offset}
-          className="transition-all duration-700 ease-out"
-        />
-        {/* Score text */}
-        <text x={cx} y={cy - 10} textAnchor="middle" className="text-2xl font-bold" fill={colors.bar}>
-          {score}
-        </text>
-        <text x={cx} y={cy + 8} textAnchor="middle" className="text-xs" fill="#94a3b8">
-          / 100
-        </text>
-      </svg>
-      <span className={`px-4 py-1.5 rounded-full text-sm font-semibold border ${colors.bg} ${colors.text} ${colors.border} transition-colors duration-300`}>
-        {risk.replace('_', ' ').toUpperCase()}
-      </span>
-    </div>
-  )
-}
-
-function PortionMeter({ portion }: { portion: number }) {
-  const max = 3
-  const pct = Math.min((portion / max) * 100, 100)
-  const barColor = portion > 1.5 ? '#22c55e' : portion > 0.8 ? '#f59e0b' : '#ef4444'
-
-  return (
-    <div className="flex flex-col items-center gap-2 w-full max-w-xs">
-      <div className="text-xs text-slate-500 uppercase tracking-wide font-medium">Safe Portions</div>
-      <div className="relative w-full h-4 bg-slate-200 rounded-full overflow-hidden">
-        <div
-          className="h-full rounded-full transition-all duration-700 ease-out"
-          style={{ width: `${pct}%`, backgroundColor: barColor }}
-        />
-      </div>
-      <div className="text-3xl font-bold text-slate-800">
-        {portion.toFixed(2)}
-        <span className="text-sm font-normal text-slate-500 ml-1">servings</span>
-      </div>
-    </div>
-  )
 }
 
 /* ------------------------------------------------------------------ */
@@ -111,18 +39,29 @@ export default function App() {
   // Dropdown data
   const [foods, setFoods] = useState<FoodInfo[]>([])
   const [regions, setRegions] = useState<string[]>([])
-  // Form state
+  // Festivals are derived from the foods catalog (preserves source of truth).
+  const festivals = Array.from(new Set(foods.map(f => f.festival))).sort()
+
+  // Form state — natural measurements (no raw BMI input)
+  const [gender, setGender] = useState<'male' | 'female'>('male')
   const [age, setAge] = useState(45)
-  const [bmi, setBmi] = useState(27.5)
+  const [heightCm, setHeightCm] = useState(170)
+  const [weightKg, setWeightKg] = useState(78)
   const [diabetes, setDiabetes] = useState(false)
   const [fasting, setFasting] = useState(false)
-  const [foodIdx, setFoodIdx] = useState(0)
+
+  // Selection state — guided flow: festival → region → food (filtered by festival)
+  const [selectedFestival, setSelectedFestival] = useState('')
   const [selectedRegion, setSelectedRegion] = useState('')
+  const [selectedFoodName, setSelectedFoodName] = useState('')
 
   // Prediction state
   const [result, setResult] = useState<PredictionResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Derived BMI for the live readout (computed in browser, validated server-side)
+  const bmi = computeBmi(heightCm, weightKg)
 
   // Fetch catalog on mount
   useEffect(() => {
@@ -130,19 +69,26 @@ export default function App() {
       .then(([f, r]) => {
         setFoods(f)
         setRegions(r)
+        // Seed defaults from the first festival in the catalog.
+        const firstFestival = f[0]?.festival ?? ''
+        setSelectedFestival(firstFestival)
         setSelectedRegion(r[0] ?? 'Maharashtra')
+        setSelectedFoodName(f[0]?.food_name ?? '')
       })
       .catch(() => setError('Could not connect to API. Make sure the backend is running on :8000'))
   }, [])
 
-  const selectedFood = foods[foodIdx]
+  // Foods for the currently selected festival.
+  const festivalFoods = foods.filter(f => f.festival === selectedFestival)
 
-  // Auto-select region when food changes
-  useEffect(() => {
-    if (selectedFood && !regions.includes(selectedRegion)) {
-      setSelectedRegion(selectedFood.region)
-    }
-  }, [selectedFood, selectedRegion, regions])
+  const selectedFood = foods.find(f => f.food_name === selectedFoodName) ?? foods[0]
+
+  // When the festival changes, jump to the first food of that festival.
+  const onFestivalChange = (festival: string) => {
+    setSelectedFestival(festival)
+    const first = foods.find(f => f.festival === festival)
+    if (first) setSelectedFoodName(first.food_name)
+  }
 
   const predict = useCallback(async () => {
     if (!selectedFood) return
@@ -150,11 +96,12 @@ export default function App() {
     setError(null)
     try {
       const res = await api.predict({
+        gender,
         age,
-        bmi,
+        height_cm: heightCm,
+        weight_kg: weightKg,
         diabetes_status: diabetes ? 1 : 0,
         fasting_state: fasting ? 1 : 0,
-        bmi_category: bmiCategoryFromBmi(bmi),
         festival: selectedFood.festival,
         region: selectedRegion,
         food_name: selectedFood.food_name,
@@ -172,7 +119,7 @@ export default function App() {
     } finally {
       setLoading(false)
     }
-  }, [age, bmi, diabetes, fasting, selectedFood, selectedRegion])
+  }, [gender, age, heightCm, weightKg, diabetes, fasting, selectedFood, selectedRegion])
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-sky-50 via-white to-emerald-50">
@@ -203,42 +150,62 @@ export default function App() {
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-8">
           {/* ── Left: Form (3 cols) ── */}
           <div className="lg:col-span-3 space-y-6">
-            {/* Food selection */}
+            {/* Festival context selection */}
             <section className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-              <h2 className="text-base font-semibold text-slate-800 mb-4">🍽️ Select Festival Food</h2>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <h2 className="text-base font-semibold text-slate-800 mb-4">🎉 Choose Festival &amp; Food</h2>
+              <div className="space-y-4">
+                {/* Festival → drives the food list */}
                 <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1">Food Item</label>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">Festival</label>
                   <select
                     className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-800 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
-                    value={foodIdx}
-                    onChange={e => setFoodIdx(Number(e.target.value))}
+                    value={selectedFestival}
+                    onChange={e => onFestivalChange(e.target.value)}
                   >
-                    {foods.map((f, i) => (
-                      <option key={f.food_name} value={i}>{f.food_name}</option>
+                    {festivals.map(f => (
+                      <option key={f} value={f}>{f}</option>
                     ))}
                   </select>
                 </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1">Region</label>
-                  <select
-                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-800 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
-                    value={selectedRegion}
-                    onChange={e => setSelectedRegion(e.target.value)}
-                  >
-                    {regions.map(r => (
-                      <option key={r} value={r}>{r}</option>
-                    ))}
-                  </select>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {/* Region */}
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1">Region</label>
+                    <select
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-800 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
+                      value={selectedRegion}
+                      onChange={e => setSelectedRegion(e.target.value)}
+                    >
+                      {regions.map(r => (
+                        <option key={r} value={r}>{r}</option>
+                      ))}
+                    </select>
+                  </div>
+                  {/* Food — filtered to the chosen festival */}
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1">
+                      Food {festivalFoods.length > 0 && <span className="text-slate-400">({festivalFoods.length})</span>}
+                    </label>
+                    <select
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-800 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
+                      value={selectedFoodName}
+                      onChange={e => setSelectedFoodName(e.target.value)}
+                    >
+                      {festivalFoods.map(f => (
+                        <option key={f.food_name} value={f.food_name}>{f.food_name}</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               </div>
 
               {/* Food nutrition card */}
               {selectedFood && (
                 <div className="mt-4 p-3 bg-slate-50 rounded-xl grid grid-cols-3 sm:grid-cols-5 gap-2 text-center text-xs">
-                  <Nutrient label="GI" value={selectedFood.glycemic_index.toFixed(0)} />
-                  <Nutrient label="Carbs" value={`${selectedFood.carbs_per_item_g.toFixed(1)}g`} />
-                  <Nutrient label="Sugar" value={`${selectedFood.sugar_per_item_g.toFixed(1)}g`} />
+                  <Nutrient label="Per piece" value={`${selectedFood.weight_g}g`} />
+                  <Nutrient label="Carbs" value={`${selectedFood.carbs_per_item_g.toFixed(0)}g`} />
+                  <Nutrient label="Sugar" value={`${selectedFood.sugar_per_item_g.toFixed(0)}g`} />
                   <Nutrient label="Protein" value={`${selectedFood.protein_per_item_g.toFixed(1)}g`} />
                   <Nutrient label="Energy" value={`${selectedFood.energy_per_item_kcal.toFixed(0)}kcal`} />
                 </div>
@@ -249,13 +216,42 @@ export default function App() {
             <section className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
               <h2 className="text-base font-semibold text-slate-800 mb-4">👤 Your Health Profile</h2>
               <div className="space-y-5">
-                {/* Age */}
+                {/* Gender toggle */}
+                <div>
+                  <span className="block text-xs font-medium text-slate-600 mb-2">Gender</span>
+                  <div className="inline-flex rounded-lg border border-slate-300 overflow-hidden">
+                    {(['male', 'female'] as const).map(g => (
+                      <button
+                        key={g}
+                        type="button"
+                        onClick={() => setGender(g)}
+                        className={`px-5 py-2 text-sm font-medium capitalize transition-colors ${
+                          gender === g
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-white text-slate-500 hover:bg-slate-50'
+                        }`}
+                      >
+                        {g}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Age + Height + Weight */}
                 <SliderField label="Age" value={age} min={18} max={80} step={1} unit="years"
                   onChange={setAge} />
+                <SliderField label="Height" value={heightCm} min={130} max={200} step={1} unit="cm"
+                  onChange={setHeightCm} />
+                <SliderField label="Weight" value={weightKg} min={35} max={140} step={1} unit="kg"
+                  onChange={setWeightKg} />
 
-                {/* BMI */}
-                <SliderField label="Body Mass Index (BMI)" value={bmi} min={16} max={42} step={0.1} unit={bmiCategoryFromBmi(bmi)}
-                  onChange={setBmi} />
+                {/* Live BMI readout */}
+                <div className="flex items-center justify-between p-3 rounded-lg bg-slate-50 border border-slate-200">
+                  <span className="text-xs font-medium text-slate-500">Your BMI</span>
+                  <span className="text-sm font-bold text-slate-800">
+                    {bmi.toFixed(1)} <span className="text-xs font-normal text-slate-500 capitalize">({bmiCategory(bmi)})</span>
+                  </span>
+                </div>
 
                 {/* Toggles */}
                 <div className="flex flex-wrap gap-4">
@@ -282,47 +278,15 @@ export default function App() {
             </button>
           </div>
 
-          {/* ── Right: Results (2 cols) ── */}
+          {/* ── Right: Result card (2 cols) ── */}
           <div className="lg:col-span-2">
-            <div className="sticky top-24 space-y-6">
+            <div className="sticky top-24">
               {result ? (
-                <>
-                  {/* Risk gauge */}
-                  <section className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 text-center">
-                    <h2 className="text-sm font-semibold text-slate-600 mb-1">Glucose Spike Risk</h2>
-                    <p className="text-xs text-slate-400 mb-4">{result.food_name} · {result.region}</p>
-                    <RiskGauge risk={result.glucose_spike_risk} />
-                    {result.confidence && (
-                      <p className="mt-2 text-xs text-slate-500">Model confidence: <strong>{(result.confidence * 100).toFixed(1)}%</strong></p>
-                    )}
-                  </section>
-
-                  {/* Portion meter */}
-                  <section className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-                    <PortionMeter portion={result.safe_portion_count} />
-                  </section>
-
-                  {/* Summary card */}
-                  <section className="bg-gradient-to-br from-emerald-50 to-teal-50 rounded-2xl border border-emerald-200 p-5">
-                    <h3 className="text-sm font-semibold text-emerald-800 mb-3">📋 Recommendation</h3>
-                    <p className="text-sm text-emerald-700 leading-relaxed">
-                      Based on the analysis, consuming <strong>{result.food_name}</strong> during{' '}
-                      <strong>{result.festival}</strong> carries a{' '}
-                      <strong className="text-red-600">{result.glucose_spike_risk.replace('_', ' ')}</strong>{' '}
-                      glucose-spike risk for this health profile.
-                      {result.safe_portion_count >= 1.0 && (
-                        <> You can safely enjoy up to <strong>{result.safe_portion_count.toFixed(1)} portions</strong>.</>
-                      )}
-                      {result.safe_portion_count < 1.0 && (
-                        <> Limit intake to <strong>{result.safe_portion_count.toFixed(1)} portions</strong> or consider an alternative.</>
-                      )}
-                    </p>
-                  </section>
-                </>
+                <VerdictCard result={result} />
               ) : (
                 <section className="bg-white rounded-2xl shadow-sm border border-slate-200 p-12 text-center">
                   <div className="text-4xl mb-3">🍽️</div>
-                  <p className="text-sm text-slate-500">Select a food and profile, then click <strong>Analyze</strong> to see your personalized risk assessment.</p>
+                  <p className="text-sm text-slate-500">Select a food and your profile, then click <strong>Analyze</strong> to see how much you can safely eat — and why.</p>
                 </section>
               )}
             </div>
@@ -339,6 +303,50 @@ export default function App() {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Result card — verdict + how much + why                             */
+/* ------------------------------------------------------------------ */
+
+function VerdictCard({ result }: { result: PredictionResponse }) {
+  const style = RISK_STYLES[result.glucose_spike_risk] ?? RISK_STYLES.moderate
+
+  return (
+    <section className={`rounded-2xl shadow-sm border-2 p-6 ${style.bg} ${style.border}`}>
+      {/* Verdict header */}
+      <div className="flex items-center gap-3 mb-1">
+        <span className="text-2xl">{style.emoji}</span>
+        <h2 className={`text-2xl font-extrabold ${style.text}`}>{result.verdict}</h2>
+      </div>
+      <p className="text-xs text-slate-500 mb-5">{result.food_name} · {result.festival}</p>
+
+      {/* How much */}
+      <div className="bg-white/70 rounded-xl p-4 mb-4">
+        <p className="text-xs font-medium text-slate-500 mb-1">How much can you eat?</p>
+        <p className="text-3xl font-bold text-slate-800">
+          ≈ {result.safe_grams}g
+          <span className="text-base font-medium text-slate-500 ml-2">({result.safe_pieces})</span>
+        </p>
+        <p className="text-xs text-slate-500 mt-1">
+          That&apos;s about {result.sugar_g}g sugar · {result.carbs_g}g carbs · {result.energy_kcal} cal
+        </p>
+      </div>
+
+      {/* Why */}
+      <div className="bg-white/70 rounded-xl p-4">
+        <p className="text-xs font-medium text-slate-500 mb-2">Why this matters for you</p>
+        <ul className="space-y-1.5">
+          {result.reasons.map((r, i) => (
+            <li key={i} className="flex items-start gap-2 text-sm text-slate-700">
+              <span className="text-slate-400 mt-0.5">•</span>
+              <span>{r}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </section>
+  )
+}
+
+/* ------------------------------------------------------------------ */
 /*  Small reusable components                                          */
 /* ------------------------------------------------------------------ */
 
@@ -350,7 +358,9 @@ function SliderField({ label, value, min, max, step, unit, onChange }: {
     <div>
       <div className="flex items-baseline justify-between mb-1">
         <span className="text-xs font-medium text-slate-600">{label}</span>
-        <span className="text-sm font-bold text-slate-800">{value}{step >= 1 ? '' : ''} <span className="text-xs font-normal text-slate-500">{unit}</span></span>
+        <span className="text-sm font-bold text-slate-800">
+          {value} <span className="text-xs font-normal text-slate-500">{unit}</span>
+        </span>
       </div>
       <input
         type="range" min={min} max={max} step={step} value={value}
